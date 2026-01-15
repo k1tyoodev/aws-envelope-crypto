@@ -1,0 +1,25 @@
+[project]
+name = "aws-envelope-crypto"
+version = "0.1.0"
+description = "AWS KMS envelope encryption with OIDC support"
+requires-python = ">=3.11"
+dependencies = [
+    "cryptography>=41.0.0",
+    "boto3>=1.35.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "safetensors>=0.4.0",
+    "numpy>=1.24.0",
+]
+
+[project.scripts]
+aws-envelope-crypto = "aws_envelope_crypto.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aws_envelope_crypto"]
