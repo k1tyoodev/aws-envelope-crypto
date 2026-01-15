@@ -8,6 +8,7 @@ from .multi import decrypt_file, decrypt_files_parallel, encrypt_file, encrypt_f
 from .oidc import get_sts_credentials
 
 DEFAULT_REGION = "us-east-1"
+WEIGHT_EXTENSIONS = ("*.pth", "*.pkl", "*.t7", "*.pt")
 
 
 def cmd_encrypt(args: argparse.Namespace) -> int:
@@ -25,10 +26,15 @@ def cmd_encrypt(args: argparse.Namespace) -> int:
         enc_file, key_file = encrypt_file(input_path, output_dir, kms)
         print(f"Encrypted: {enc_file.name}, {key_file.name}")
     elif input_path.is_dir():
-        pattern = f"**/{args.pattern}" if args.recursive else args.pattern
-        files = sorted(f for f in input_path.glob(pattern) if f.is_file())
+        if args.weights:
+            patterns = [f"**/{ext}" if args.recursive else ext for ext in WEIGHT_EXTENSIONS]
+            files = sorted({f for p in patterns for f in input_path.glob(p) if f.is_file()})
+        else:
+            pattern = f"**/{args.pattern}" if args.recursive else args.pattern
+            files = sorted(f for f in input_path.glob(pattern) if f.is_file())
         if not files:
-            print(f"No files matching '{pattern}' in {input_path}", file=sys.stderr)
+            pattern_desc = "weight files" if args.weights else f"'{args.pattern}'"
+            print(f"No files matching {pattern_desc} in {input_path}", file=sys.stderr)
             return 1
 
         total_size_mb = sum(f.stat().st_size for f in files) / 1024 / 1024
@@ -116,6 +122,9 @@ def main() -> int:
     enc.add_argument("--input", "-i", required=True, help="File or directory to encrypt")
     enc.add_argument("--output-dir", "-o", default="./encrypted", help="Output directory")
     enc.add_argument("--pattern", default="*", help="Glob pattern for directory input")
+    enc.add_argument(
+        "--weights", "-w", action="store_true", help="Match weight files (pth, pkl, t7, pt)"
+    )
     enc.add_argument(
         "--recursive", "-r", action="store_true", help="Recursively search subdirectories"
     )
