@@ -4,13 +4,17 @@ from pathlib import Path
 import pytest
 
 from aws_envelope_crypto import (
+    DEKDecryptionError,
+    ManifestKeyMismatchError,
     decrypt,
     encrypt,
     encrypt_file_with_dek,
     encrypt_files_with_existing_dek,
+    find_manifest_path,
     generate_dek,
     load_dek_from_file,
     update_manifest,
+    validate_manifest_key_file,
 )
 from aws_envelope_crypto.envelope import secure_zero
 
@@ -306,3 +310,78 @@ class TestReencryptWorkflow:
         new_encrypted_data = new_enc_file.read_bytes()
         decrypted_data = decrypt(new_encrypted_data, dek)
         assert decrypted_data == new_data
+
+
+class TestFindManifestPath:
+    def test_finds_path_by_filename(self, temp_dir):
+        manifest_path = temp_dir / "manifest.json"
+        manifest = {
+            "files": [
+                {"path": "subdir/model.pth", "sha256": "abc123"},
+                {"path": "config.pth", "sha256": "def456"},
+            ],
+            "key_file": "shared.key",
+        }
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+
+        result = find_manifest_path(manifest_path, "model.pth")
+        assert result == "subdir/model.pth"
+
+    def test_returns_none_when_not_found(self, temp_dir):
+        manifest_path = temp_dir / "manifest.json"
+        manifest = {
+            "files": [{"path": "model.pth", "sha256": "abc123"}],
+            "key_file": "shared.key",
+        }
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+
+        result = find_manifest_path(manifest_path, "nonexistent.pth")
+        assert result is None
+
+
+class TestValidateManifestKeyFile:
+    def test_passes_when_key_matches(self, temp_dir):
+        manifest_path = temp_dir / "manifest.json"
+        manifest = {
+            "files": [{"path": "model.pth", "sha256": "abc123"}],
+            "key_file": "shared.key",
+        }
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+
+        key_path = temp_dir / "shared.key"
+        validate_manifest_key_file(manifest_path, key_path)
+
+    def test_raises_when_key_mismatches(self, temp_dir):
+        manifest_path = temp_dir / "manifest.json"
+        manifest = {
+            "files": [{"path": "model.pth", "sha256": "abc123"}],
+            "key_file": "shared.key",
+        }
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+
+        wrong_key_path = temp_dir / "other.key"
+        with pytest.raises(ManifestKeyMismatchError):
+            validate_manifest_key_file(manifest_path, wrong_key_path)
+
+
+class TestLoadDekFromFileErrors:
+    def test_raises_on_file_not_found(self, temp_dir, mock_kms):
+        nonexistent = temp_dir / "nonexistent.key"
+        with pytest.raises(FileNotFoundError):
+            load_dek_from_file(nonexistent, mock_kms)
+
+    def test_raises_on_empty_file(self, temp_dir, mock_kms):
+        empty_key = temp_dir / "empty.key"
+        empty_key.write_bytes(b"")
+        with pytest.raises(ValueError, match="empty"):
+            load_dek_from_file(empty_key, mock_kms)
+
+    def test_raises_on_decryption_failure(self, temp_dir):
+        class FailingKMS:
+            def decrypt_dek(self, encrypted_dek: bytes) -> bytes:
+                raise Exception("KMS error")
+
+        bad_key = temp_dir / "bad.key"
+        bad_key.write_bytes(b"invalid data")
+        with pytest.raises(DEKDecryptionError, match="Failed to decrypt"):
+            load_dek_from_file(bad_key, FailingKMS())

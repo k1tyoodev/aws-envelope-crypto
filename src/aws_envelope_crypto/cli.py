@@ -6,14 +6,18 @@ from pathlib import Path
 from .envelope import secure_zero
 from .kms import KMSClient
 from .multi import (
+    DEKDecryptionError,
+    ManifestKeyMismatchError,
     decrypt_file,
     decrypt_files_parallel,
     encrypt_file,
     encrypt_file_with_dek,
     encrypt_files_shared_dek,
     encrypt_files_with_existing_dek,
+    find_manifest_path,
     load_dek_from_file,
     update_manifest,
+    validate_manifest_key_file,
 )
 from .oidc import get_sts_credentials
 
@@ -35,53 +39,70 @@ def cmd_encrypt_with_existing_dek(args: argparse.Namespace) -> int:
         print(f"Error: DEK file not found: {key_path}", file=sys.stderr)
         return 1
 
+    if manifest_path and manifest_path.exists():
+        try:
+            validate_manifest_key_file(manifest_path, key_path)
+        except ManifestKeyMismatchError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+
     output_dir.mkdir(parents=True, exist_ok=True)
     kms = KMSClient(key_id=args.kms_key_id, region=args.kms_region)
 
-    if input_path.is_file():
+    try:
         dek = load_dek_from_file(key_path, kms)
-        try:
+    except (FileNotFoundError, ValueError, DEKDecryptionError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    try:
+        if input_path.is_file():
+            rel_path = input_path.name
+            if manifest_path and manifest_path.exists():
+                found_path = find_manifest_path(manifest_path, input_path.name)
+                if found_path:
+                    rel_path = found_path
+
             enc_file, file_hash = encrypt_file_with_dek(input_path, output_dir, dek)
             print(f"Encrypted: {enc_file.name}")
 
             if manifest_path and manifest_path.exists():
-                rel_path = input_path.name
                 update_manifest(manifest_path, {rel_path: file_hash})
                 print(f"Updated manifest: {manifest_path}")
-        finally:
-            secure_zero(dek)
-    elif input_path.is_dir():
-        if args.weights:
-            patterns = [f"**/{ext}" if args.recursive else ext for ext in WEIGHT_EXTENSIONS]
-            files = sorted({f for p in patterns for f in input_path.glob(p) if f.is_file()})
-        else:
-            pattern = f"**/{args.pattern}" if args.recursive else args.pattern
-            files = sorted(f for f in input_path.glob(pattern) if f.is_file())
-
-        if not files:
-            pattern_desc = "weight files" if args.weights else f"'{args.pattern}'"
-            print(f"No files matching {pattern_desc} in {input_path}", file=sys.stderr)
-            return 1
-
-        total_size_mb = sum(f.stat().st_size for f in files) / 1024 / 1024
-        print(f"Found {len(files)} files ({total_size_mb:.1f} MB)")
-
-        enc_files, file_hashes = encrypt_files_with_existing_dek(
-            files, output_dir, kms, key_path, base_dir=input_path
-        )
-
-        if manifest_path:
-            if manifest_path.exists():
-                update_manifest(manifest_path, file_hashes, add_missing=True)
-                print(f"Updated manifest: {manifest_path}")
+        elif input_path.is_dir():
+            if args.weights:
+                patterns = [f"**/{ext}" if args.recursive else ext for ext in WEIGHT_EXTENSIONS]
+                files = sorted({f for p in patterns for f in input_path.glob(p) if f.is_file()})
             else:
-                print(f"Warning: manifest not found: {manifest_path}", file=sys.stderr)
+                pattern = f"**/{args.pattern}" if args.recursive else args.pattern
+                files = sorted(f for f in input_path.glob(pattern) if f.is_file())
 
-        print(f"Encrypted {len(enc_files)} files with existing DEK")
-        print(f"Output: {output_dir}")
-    else:
-        print(f"Input not found: {input_path}", file=sys.stderr)
-        return 1
+            if not files:
+                pattern_desc = "weight files" if args.weights else f"'{args.pattern}'"
+                print(f"No files matching {pattern_desc} in {input_path}", file=sys.stderr)
+                return 1
+
+            total_size_mb = sum(f.stat().st_size for f in files) / 1024 / 1024
+            print(f"Found {len(files)} files ({total_size_mb:.1f} MB)")
+
+            enc_files, file_hashes = encrypt_files_with_existing_dek(
+                files, output_dir, kms, key_path, base_dir=input_path
+            )
+
+            if manifest_path:
+                if manifest_path.exists():
+                    update_manifest(manifest_path, file_hashes, add_missing=True)
+                    print(f"Updated manifest: {manifest_path}")
+                else:
+                    print(f"Warning: manifest not found: {manifest_path}", file=sys.stderr)
+
+            print(f"Encrypted {len(enc_files)} files with existing DEK")
+            print(f"Output: {output_dir}")
+        else:
+            print(f"Input not found: {input_path}", file=sys.stderr)
+            return 1
+    finally:
+        secure_zero(dek)
 
     return 0
 

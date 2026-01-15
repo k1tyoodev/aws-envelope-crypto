@@ -16,7 +16,17 @@ __all__ = [
     "encrypt_file_with_dek",
     "encrypt_files_with_existing_dek",
     "update_manifest",
+    "find_manifest_path",
+    "validate_manifest_key_file",
 ]
+
+
+class DEKDecryptionError(Exception):
+    pass
+
+
+class ManifestKeyMismatchError(Exception):
+    pass
 
 
 @dataclass
@@ -179,8 +189,16 @@ def decrypt_files_parallel(
 
 
 def load_dek_from_file(key_path: Path, kms: KMSClient) -> bytearray:
+    if not key_path.exists():
+        raise FileNotFoundError(f"DEK file not found: {key_path}")
+    if key_path.stat().st_size == 0:
+        raise ValueError(f"DEK file is empty: {key_path}")
+
     encrypted_dek = key_path.read_bytes()
-    return bytearray(kms.decrypt_dek(encrypted_dek))
+    try:
+        return bytearray(kms.decrypt_dek(encrypted_dek))
+    except Exception as e:
+        raise DEKDecryptionError(f"Failed to decrypt DEK: {e}") from e
 
 
 def encrypt_file_with_dek(
@@ -245,3 +263,20 @@ def update_manifest(
                 manifest["files"].append({"path": path, "sha256": sha256})
 
     manifest_path.write_text(json.dumps(manifest, indent=2))
+
+
+def find_manifest_path(manifest_path: Path, filename: str) -> str | None:
+    manifest = json.loads(manifest_path.read_text())
+    for entry in manifest["files"]:
+        if Path(entry["path"]).name == filename:
+            return entry["path"]
+    return None
+
+
+def validate_manifest_key_file(manifest_path: Path, key_path: Path) -> None:
+    manifest = json.loads(manifest_path.read_text())
+    manifest_key = manifest.get("key_file")
+    if manifest_key and Path(manifest_key).name != key_path.name:
+        raise ManifestKeyMismatchError(
+            f"DEK file mismatch: manifest expects '{manifest_key}', got '{key_path.name}'"
+        )
