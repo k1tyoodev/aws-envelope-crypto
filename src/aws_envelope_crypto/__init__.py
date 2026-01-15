@@ -1,6 +1,15 @@
 from .envelope import decrypt, encrypt, generate_dek
 from .kms import KMSClient
-from .multi import decrypt_file, decrypt_files_parallel, encrypt_file, encrypt_files_shared_dek
+from .multi import (
+    decrypt_file,
+    decrypt_files_parallel,
+    encrypt_file,
+    encrypt_file_with_dek,
+    encrypt_files_shared_dek,
+    encrypt_files_with_existing_dek,
+    load_dek_from_file,
+    update_manifest,
+)
 from .oidc import STSCredentials, clear_credentials_cache, get_sts_credentials
 
 __all__ = [
@@ -12,7 +21,11 @@ __all__ = [
     "STSCredentials",
     "clear_credentials_cache",
     "encrypt_file",
+    "encrypt_file_with_dek",
     "encrypt_files_shared_dek",
+    "encrypt_files_with_existing_dek",
+    "load_dek_from_file",
+    "update_manifest",
     "decrypt_file",
     "decrypt_files_parallel",
 ]

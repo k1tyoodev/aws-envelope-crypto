@@ -6,6 +6,18 @@ from pathlib import Path
 from .envelope import decrypt, encrypt, file_sha256, generate_dek, secure_zero
 from .kms import KMSClient
 
+__all__ = [
+    "DecryptResult",
+    "encrypt_file",
+    "encrypt_files_shared_dek",
+    "decrypt_file",
+    "decrypt_files_parallel",
+    "load_dek_from_file",
+    "encrypt_file_with_dek",
+    "encrypt_files_with_existing_dek",
+    "update_manifest",
+]
+
 
 @dataclass
 class DecryptResult:
@@ -164,3 +176,72 @@ def decrypt_files_parallel(
         return results
     finally:
         secure_zero(dek)
+
+
+def load_dek_from_file(key_path: Path, kms: KMSClient) -> bytearray:
+    encrypted_dek = key_path.read_bytes()
+    return bytearray(kms.decrypt_dek(encrypted_dek))
+
+
+def encrypt_file_with_dek(
+    input_path: Path,
+    output_dir: Path,
+    dek: bytearray,
+    output_name: str | None = None,
+) -> tuple[Path, str]:
+    data = input_path.read_bytes()
+    original_hash = file_sha256(input_path)
+    encrypted_data = encrypt(data, dek)
+
+    enc_name = output_name or f"{input_path.name}.enc"
+    enc_file = output_dir / enc_name
+    enc_file.parent.mkdir(parents=True, exist_ok=True)
+    enc_file.write_bytes(encrypted_data)
+
+    return enc_file, original_hash
+
+
+def encrypt_files_with_existing_dek(
+    files: list[Path],
+    output_dir: Path,
+    kms: KMSClient,
+    key_file: Path,
+    base_dir: Path | None = None,
+) -> tuple[list[Path], dict[str, str]]:
+    dek = load_dek_from_file(key_file, kms)
+    try:
+        enc_files = []
+        file_hashes: dict[str, str] = {}
+
+        for f in files:
+            rel_path = str(f.relative_to(base_dir) if base_dir else f.name)
+            enc_rel_path = f"{rel_path}.enc"
+
+            enc_file, original_hash = encrypt_file_with_dek(f, output_dir, dek, enc_rel_path)
+            enc_files.append(enc_file)
+            file_hashes[rel_path] = original_hash
+
+        return enc_files, file_hashes
+    finally:
+        secure_zero(dek)
+
+
+def update_manifest(
+    manifest_path: Path,
+    file_updates: dict[str, str],
+    add_missing: bool = False,
+) -> None:
+    manifest = json.loads(manifest_path.read_text())
+
+    existing_paths = {entry["path"] for entry in manifest["files"]}
+
+    for entry in manifest["files"]:
+        if entry["path"] in file_updates:
+            entry["sha256"] = file_updates[entry["path"]]
+
+    if add_missing:
+        for path, sha256 in file_updates.items():
+            if path not in existing_paths:
+                manifest["files"].append({"path": path, "sha256": sha256})
+
+    manifest_path.write_text(json.dumps(manifest, indent=2))
