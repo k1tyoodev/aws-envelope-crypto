@@ -1,3 +1,4 @@
+import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -122,7 +123,7 @@ def _decrypt_single_file(
         out_path.write_bytes(data)
 
         if expected_hash:
-            actual_hash = file_sha256(out_path)
+            actual_hash = hashlib.sha256(data).hexdigest()
             if actual_hash != expected_hash:
                 out_path.unlink(missing_ok=True)
                 return DecryptResult(
