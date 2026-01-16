@@ -2,6 +2,7 @@ import ctypes
 import hashlib
 import os
 import struct
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -69,15 +70,19 @@ def decrypt(encrypted: bytes, dek: bytes | bytearray) -> bytes:
         raise ValueError("Ciphertext length does not match header")
 
     aesgcm = AESGCM(bytes(dek))
-    plaintext_chunks = []
 
-    for i in range(num_chunks):
+    def decrypt_chunk(i: int) -> bytes:
         start = HEADER_SIZE + i * chunk_encrypted_size
         end = None if i == num_chunks - 1 else start + chunk_encrypted_size
         chunk_data = encrypted[start:end]
-
         nonce = chunk_data[:NONCE_SIZE]
         ciphertext = chunk_data[NONCE_SIZE:]
-        plaintext_chunks.append(aesgcm.decrypt(nonce, ciphertext, header))
+        return aesgcm.decrypt(nonce, ciphertext, header)
+
+    if num_chunks == 1:
+        return decrypt_chunk(0)
+
+    with ThreadPoolExecutor(max_workers=min(num_chunks, os.cpu_count() or 4)) as executor:
+        plaintext_chunks = list(executor.map(decrypt_chunk, range(num_chunks)))
 
     return b"".join(plaintext_chunks)
